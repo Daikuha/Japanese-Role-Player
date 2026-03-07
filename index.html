@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Japanese Role-player</title>
+    <title>Role-play Player</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -14,7 +14,7 @@
             <!-- SETUP VIEW -->
             <div id="setup-view" class="flex flex-col h-full w-full absolute inset-0 bg-white z-10">
                 <div class="bg-emerald-600 p-4 text-white">
-                    <h1 class="text-xl font-bold text-center">Japanese Role-player</h1>
+                    <h1 class="text-xl font-bold text-center">Role-play Player</h1>
                 </div>
                 <div class="p-6 flex-1 flex flex-col gap-4 overflow-y-auto">
                     <div class="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100 shadow-sm">
@@ -110,6 +110,9 @@
         let sttRetryCount = 0;
         let isSttActive = false;
 
+        // iOS Bug Fix: Keep utterance in global scope to prevent GC
+        let currentUtterance = null;
+
         const DEFAULT_SCRIPT = `【Greeting Example】
 A: おはようございます。
 B: おはようございます。
@@ -119,19 +122,16 @@ B: はい、げんきです。`;
         // --- Helper: Parse Script ---
         const parseScript = (scriptText) => {
             return scriptText.split('\n')
-                .map(line => line.trim()) // 行の先頭と末尾のスペース（全角・半角）を自動で削除
+                .map(line => line.trim())
                 .filter(line => line.length > 0)
                 .map((line, index) => {
                     if (line.startsWith('【')) return { id: index, speaker: 'system', text: line };
-                    
-                    // 正規表現を使って、全角・半角の「A:」「A：」「Ａ：」などに柔軟に対応
                     if (line.match(/^[AＡaａ][:：]/)) {
                         return { id: index, speaker: 'A', text: line.replace(/^[AＡaａ][:：]/, '').trim() };
                     }
                     if (line.match(/^[BＢbｂ][:：]/)) {
                         return { id: index, speaker: 'B', text: line.replace(/^[BＢbｂ][:：]/, '').trim() };
                     }
-                    
                     return { id: index, speaker: 'system', text: line };
                 });
         };
@@ -147,12 +147,11 @@ B: はい、げんきです。`;
 
                 recognition.onstart = () => {
                     isSttActive = true;
-                    sttRetryCount = 0; // 正常に起動したらリトライ回数をリセット
+                    sttRetryCount = 0;
                 };
                 
                 recognition.onerror = (e) => {
                     console.warn('Speech Recognition Error:', e.error);
-                    // 致命的なエラー（マイク未許可など）の場合はリトライを停止して無限ループを防ぐ
                     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
                         sttRetryCount = 999; 
                     }
@@ -160,14 +159,10 @@ B: はい、げんきです。`;
 
                 recognition.onresult = (event) => {
                     if (!isPlaying) return;
-
                     const currentLine = dialogs[currentIndex];
-
                     if (status === 'listening' && currentLine && currentLine.speaker === userRole) {
-                        // 常に最新の認識結果を確実に取得する
                         const lastResult = event.results[event.results.length - 1];
                         const text = lastResult[0].transcript;
-                        
                         if (text.trim()) {
                             userRecords[currentIndex] = text;
                             setStatus('idle');
@@ -181,7 +176,6 @@ B: はい、げんきです。`;
 
                 recognition.onend = () => {
                     isSttActive = false;
-                    // 再生中かつリトライ上限に達していない場合のみ、安全な間隔を空けて再開する（フリーズ対策）
                     if (isPlaying && sttRetryCount < 3) {
                         sttRetryCount++;
                         setTimeout(() => {
@@ -191,9 +185,14 @@ B: はい、げんきです。`;
                         }, 500);
                     }
                 };
-            } else {
-                console.warn('Speech Recognition is not supported in this browser.');
             }
+        }
+
+        // --- TTS Helpers ---
+        function getJapaneseVoice() {
+            const voices = synth.getVoices();
+            // Try to find a Japanese voice explicitly
+            return voices.find(v => v.lang.includes('ja') || v.lang.includes('JP')) || null;
         }
 
         // --- State Setters ---
@@ -212,7 +211,6 @@ B: はい、げんきです。`;
         function setCurrentIndex(newIndex) {
             const prevIndex = currentIndex;
             currentIndex = newIndex;
-            
             if (prevIndex !== currentIndex) {
                 updateDialogsUI();
                 updateControlsUI();
@@ -223,8 +221,6 @@ B: はい、げんきです。`;
         // --- Core Progression Logic ---
         function processCurrentStep() {
             clearTimeout(stepTimeout);
-            
-            // 安全装置：マイナスインデックスや範囲外へのアクセスを防ぐ
             if (!isPlaying || dialogs.length === 0 || currentIndex < 0) return;
 
             if (currentIndex >= dialogs.length) {
@@ -238,7 +234,6 @@ B: はい、げんきです。`;
             const currentLine = dialogs[currentIndex];
             if (!currentLine) return;
 
-            // Auto-scroll
             setTimeout(() => {
                 const el = document.getElementById(`line-wrapper-${currentIndex}`);
                 if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -254,26 +249,29 @@ B: はい、げんきです。`;
             if (currentLine.speaker !== userRole) {
                 // AI Turn
                 setStatus('speaking');
-                const utterance = new SpeechSynthesisUtterance(currentLine.text);
-                utterance.lang = 'ja-JP';
-                utterance.rate = 1.0; 
                 
-                utterance.onend = () => {
+                currentUtterance = new SpeechSynthesisUtterance(currentLine.text);
+                currentUtterance.lang = 'ja-JP';
+                currentUtterance.rate = 1.0;
+                
+                const jpVoice = getJapaneseVoice();
+                if (jpVoice) currentUtterance.voice = jpVoice;
+                
+                currentUtterance.onend = () => {
                     setStatus('idle');
                     if (isPlaying) {
                         stepTimeout = setTimeout(() => setCurrentIndex(currentIndex + 1), 100);
                     }
                 };
                 
-                // フリーズ対策：音声合成が失敗した場合も安全に次へ進める
-                utterance.onerror = () => {
+                currentUtterance.onerror = () => {
                     setStatus('idle');
                     if (isPlaying) {
                         stepTimeout = setTimeout(() => setCurrentIndex(currentIndex + 1), 500);
                     }
                 };
 
-                synth.speak(utterance);
+                synth.speak(currentUtterance);
             } else {
                 // User Turn
                 setStatus('listening');
@@ -284,7 +282,6 @@ B: はい、げんきです。`;
         function updateUI() {
             const setupView = document.getElementById('setup-view');
             const playView = document.getElementById('play-view');
-            
             if (appState === 'setup') {
                 setupView.classList.remove('hidden');
                 setupView.classList.add('flex');
@@ -295,17 +292,12 @@ B: はい、げんきです。`;
                 setupView.classList.remove('flex');
                 playView.classList.remove('hidden');
                 playView.classList.add('flex');
-
-                // Role buttons
                 const btnA = document.getElementById('btn-role-a');
                 const btnB = document.getElementById('btn-role-b');
-                
                 btnA.className = `flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors ${userRole === 'A' ? 'bg-white text-emerald-700 shadow' : 'text-emerald-100 hover:bg-emerald-600'}`;
                 btnB.className = `flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors ${userRole === 'B' ? 'bg-white text-emerald-700 shadow' : 'text-emerald-100 hover:bg-emerald-600'}`;
-                
                 btnA.disabled = isPlaying;
                 btnB.disabled = isPlaying;
-
                 updateDialogsUI();
                 updateControlsUI();
             }
@@ -329,11 +321,9 @@ B: はい、げんきです。`;
             dialogs.forEach((line, idx) => {
                 const wrapper = document.getElementById(`line-wrapper-${idx}`);
                 if (!wrapper) return;
-
                 const isCurrent = idx === currentIndex;
                 const isPast = idx < currentIndex;
                 const isMyRole = line.speaker === userRole;
-
                 const opacityClass = (isPlaying && !isCurrent && !isPast) ? 'opacity-30' : 'opacity-100';
 
                 if (line.speaker === 'system') {
@@ -346,37 +336,27 @@ B: はい、げんきです。`;
                     ? (isCurrent ? 'bg-green-500 text-white ring-4 ring-green-200' : 'bg-green-400 text-white') 
                     : (isCurrent ? 'bg-white text-gray-800 ring-4 ring-blue-100' : 'bg-white text-gray-800');
 
-                const roleTextClass = isMyRole ? 'text-green-100' : 'text-gray-400';
-                const justifyClass = isMyRole ? 'justify-end' : 'justify-start';
+                const recordHtml = (isMyRole && userRecords[idx]) ? `
+                    <div class="mt-2 pt-2 border-t border-green-300 text-sm bg-green-600/30 rounded p-2 text-white">
+                        <span class="text-xs opacity-80 block mb-1">Your pronunciation:</span>
+                        <div class="font-medium">${escapeHtml(userRecords[idx])}</div>
+                    </div>
+                ` : '';
 
-                let recordHtml = '';
-                if (isMyRole && userRecords[idx]) {
-                    recordHtml = `
-                        <div class="mt-2 pt-2 border-t border-green-300 text-sm bg-green-600/30 rounded p-2 text-white">
-                            <span class="text-xs opacity-80 block mb-1">Your pronunciation:</span>
-                            <div class="font-medium">${escapeHtml(userRecords[idx])}</div>
-                        </div>
-                    `;
-                }
-
-                let bounceHtml = '';
-                if (isCurrent) {
-                    bounceHtml = `
-                        <div class="absolute -left-8 top-1/2 -translate-y-1/2 text-xl animate-bounce">
-                            ${isMyRole ? '🎤' : '🗣️'}
-                        </div>
-                    `;
-                }
+                const bounceHtml = isCurrent ? `
+                    <div class="absolute -left-8 top-1/2 -translate-y-1/2 text-xl animate-bounce">
+                        ${isMyRole ? '🎤' : '🗣️'}
+                    </div>
+                ` : '';
 
                 wrapper.innerHTML = `
-                    <div class="flex w-full mb-4 ${justifyClass} transition-opacity duration-300 ${opacityClass}">
+                    <div class="flex w-full mb-4 ${isMyRole ? 'justify-end' : 'justify-start'} transition-opacity duration-300 ${opacityClass}">
                         <div class="max-w-[80%] rounded-2xl px-4 py-3 relative shadow-sm ${myRoleBg}">
-                            <div class="text-xs font-bold mb-1 ${roleTextClass}">
+                            <div class="text-xs font-bold mb-1 ${isMyRole ? 'text-green-100' : 'text-gray-400'}">
                                 ${escapeHtml(line.speaker)} ${isMyRole ? '(You)' : ''}
                             </div>
                             <div class="text-lg leading-relaxed font-medium tracking-wide">${escapeHtml(line.text)}</div>
-                            ${recordHtml}
-                            ${bounceHtml}
+                            ${recordHtml}${bounceHtml}
                         </div>
                     </div>
                 `;
@@ -393,52 +373,16 @@ B: はい、げんきです。`;
                     </button>
                 `;
             } else {
-                let statusHTML = '';
-                if (status === 'speaking') {
-                    statusHTML = '<span class="text-blue-500">AI is speaking... 🗣️</span>';
-                } else if (status === 'listening') {
-                    statusHTML = '<span class="text-red-500 animate-pulse">Your turn! Please speak 🎤</span>';
-                } else {
-                    statusHTML = '<span>Ready...</span>';
-                }
-
+                let statusHTML = status === 'speaking' ? '<span class="text-blue-500">AI is speaking... 🗣️</span>' : 
+                                 status === 'listening' ? '<span class="text-red-500 animate-pulse">Your turn! Please speak 🎤</span>' : '<span>Ready...</span>';
                 const currentLine = dialogs[currentIndex];
                 const isMyTurn = currentLine && currentLine.speaker === userRole;
-
-                let controlsHtml = `
-                    <button onclick="handleStop()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect></svg>
-                        Stop
-                    </button>
-                `;
-
+                let controlsHtml = `<button onclick="handleStop()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect></svg>Stop</button>`;
                 if (isMyTurn) {
-                    let extraBtn = '';
-                    if (status === 'idle') {
-                        extraBtn = `
-                            <button onclick="handleManualMic()" class="flex-1 bg-red-100 text-red-600 border border-red-300 font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>
-                                Speak Again
-                            </button>
-                        `;
-                    }
-                    controlsHtml += `
-                        ${extraBtn}
-                        <button onclick="handleManualNext()" class="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>
-                            Skip
-                        </button>
-                    `;
+                    controlsHtml += (status === 'idle' ? `<button onclick="handleManualMic()" class="flex-1 bg-red-100 text-red-600 border border-red-300 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>Again</button>` : '') + 
+                                     `<button onclick="handleManualNext()" class="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>Skip</button>`;
                 }
-
-                panel.innerHTML = `
-                    <div class="flex flex-col gap-3">
-                        <div class="text-center font-bold text-gray-600 h-6">${statusHTML}</div>
-                        <div class="flex gap-2">
-                            ${controlsHtml}
-                        </div>
-                    </div>
-                `;
+                panel.innerHTML = `<div class="flex flex-col gap-3"><div class="text-center font-bold text-gray-600 h-6">${statusHTML}</div><div class="flex gap-2">${controlsHtml}</div></div>`;
             }
         }
 
@@ -447,73 +391,39 @@ B: はい、げんきです。`;
             const text = document.getElementById('script-input').value;
             const parsed = parseScript(text);
             if (parsed.length > 0) {
-                dialogs = parsed;
-                appState = 'play';
-                userRecords = {};
-                setIsPlaying(false);
-                currentIndex = -1; 
-                status = 'idle';
-                renderDialogsInitial();
-                updateUI();
+                dialogs = parsed; appState = 'play'; userRecords = {};
+                setIsPlaying(false); currentIndex = -1; status = 'idle';
+                renderDialogsInitial(); updateUI();
             }
         }
-
-        function handleEditScript() {
-            handleStop();
-            appState = 'setup';
-            updateUI();
-        }
-
+        function handleEditScript() { handleStop(); appState = 'setup'; updateUI(); }
+        
         function handleStart() {
+            // iOS Fix: Unlock Speech Synthesis on user interaction
+            const unlockUtterance = new SpeechSynthesisUtterance("");
+            synth.speak(unlockUtterance);
+
             userRecords = {};
-            sttRetryCount = 0; // 開始時にリトライカウンターをリセット
+            sttRetryCount = 0;
             try { recognition.start(); } catch(e){}
             setIsPlaying(true);
             setCurrentIndex(0);
         }
+        
+        function handleStop() { setIsPlaying(false); currentIndex = -1; status = 'idle'; synth.cancel(); try { recognition.abort(); } catch(e){} }
+        function handleManualNext() { synth.cancel(); setCurrentIndex(currentIndex + 1); }
+        function handleManualMic() { try { recognition.stop(); setTimeout(() => recognition.start(), 100); } catch(e){} }
+        function handleRoleChange(role) { if (isPlaying) return; userRole = role; updateUI(); }
 
-        function handleStop() {
-            setIsPlaying(false);
-            setCurrentIndex(-1);
-            setStatus('idle');
-            synth.cancel();
-            try { recognition.abort(); } catch(e){}
-        }
-
-        function handleManualNext() {
-            synth.cancel();
-            setCurrentIndex(currentIndex + 1);
-        }
-
-        function handleManualMic() {
-            try {
-                recognition.stop();
-                setTimeout(() => recognition.start(), 100);
-            } catch(e){}
-        }
-
-        function handleRoleChange(role) {
-            if (isPlaying) return;
-            userRole = role;
-            updateUI();
-        }
-
-        // --- Initialization ---
         window.addEventListener('DOMContentLoaded', () => {
             document.getElementById('script-input').value = DEFAULT_SCRIPT;
-            initSTT();
-            updateUI();
-
-            // Setup script input validation
+            initSTT(); updateUI();
             document.getElementById('script-input').addEventListener('input', (e) => {
                 const btn = document.getElementById('btn-load-script');
-                if (e.target.value.trim() === '') {
-                    btn.disabled = true;
-                    btn.classList.add('opacity-50', 'cursor-not-allowed');
-                } else {
-                    btn.disabled = false;
-                    btn.classList.remove('opacity-50', 'cursor-not-allowed');
-                }
+                const isEmpty = e.target.value.trim() === '';
+                btn.disabled = isEmpty;
+                btn.classList.toggle('opacity-50', isEmpty);
+                btn.classList.toggle('cursor-not-allowed', isEmpty);
             });
         });
     </script>
