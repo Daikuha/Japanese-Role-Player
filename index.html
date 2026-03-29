@@ -1,431 +1,1058 @@
 <!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Role-play Generator</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel for in-browser JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  
+  <style>
+    .font-kyokasho { font-family: 'Klee One', 'UD Digi Kyokasho N-R', 'Yu Mincho', serif; }
+    .font-ui { font-family: 'Noto Sans JP', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 font-ui text-slate-800">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const parseScript = (scriptText) => {
+      const lines = scriptText.split('\n');
+      const dialogs = [];
+      const speakerSet = new Set();
+      let currentDialog = null;
+      let idCounter = 0;
+      let nextSpeaker = 'A';
+
+      const prefixRegex = /^([a-zA-Zａ-ｚＡ-Ｚ0-9]+)[:：]/;
+      const hasPrefixes = /^([a-zA-Zａ-ｚＡ-Ｚ0-9]+)[:：]/m.test(scriptText);
+      const hasBlankLines = /\n\s*\n/.test(scriptText);
+
+      if (!hasPrefixes && !hasBlankLines) {
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed) {
+            dialogs.push({ id: idCounter++, speaker: nextSpeaker, text: trimmed, subTexts: [] });
+            speakerSet.add(nextSpeaker);
+            nextSpeaker = nextSpeaker === 'A' ? 'B' : 'A';
+          }
+        }
+        return { dialogs, speakers: Array.from(speakerSet) };
+      }
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+
+        if (!trimmed) {
+          if (currentDialog) {
+            dialogs.push(currentDialog);
+            speakerSet.add(currentDialog.speaker);
+            currentDialog = null;
+          }
+          continue;
+        }
+
+        const match = trimmed.match(prefixRegex);
+
+        if (match) {
+          if (currentDialog) {
+            dialogs.push(currentDialog);
+            speakerSet.add(currentDialog.speaker);
+          }
+          let speakerName = match[1].replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(s) {
+            return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+          }).toUpperCase();
+          
+          currentDialog = { id: idCounter++, speaker: speakerName, text: trimmed.substring(match[0].length).trim(), subTexts: [] };
+        } else {
+          if (currentDialog) {
+            currentDialog.subTexts.push(trimmed);
+          } else {
+            currentDialog = { id: idCounter++, speaker: nextSpeaker, text: trimmed, subTexts: [] };
+            speakerSet.add(nextSpeaker);
+            nextSpeaker = nextSpeaker === 'A' ? 'B' : 'A';
+          }
+        }
+      }
+
+      if (currentDialog) {
+        dialogs.push(currentDialog);
+        speakerSet.add(currentDialog.speaker);
+      }
+
+      const speakers = Array.from(speakerSet);
+      return { dialogs, speakers: speakers.length > 0 ? speakers : ['A', 'B'] };
+    };
+
+    const DEFAULT_SCRIPT = `A: すみません。　この　カメラ、　ください。
+Sumimasen. Kono kamera, kudasai.
+Hello, I’d like to buy this camera.
+
+B: ありがとうございます。　ポイントカード、　ありますか。
+Arigatō gozaimasu. Pointo kādo, arimasu ka.
+Thank you. Do you have a Yodobashi point card?
+
+A: いいえ、　ありません。
+Iie, arimasen.
+No, I don’t.
+
+B: つくりますか。　きょうは　むりょうですよ。
+Tsukurimasu ka. Kyō wa muryō desu yo.
+Would you like to sign up for one? It’s free today.
+
+A: いいえ、　けっこうです。　カメラだけで　おねがいします。
+Iie, kekkō desu. Kamera dake de onegaishimasu.
+No, thank you. I don’t need a card. Just the camera is fine.`;
+
+    function App() {
+      const [appState, setAppState] = useState('setup'); 
+      const [appTitle, setAppTitle] = useState('Shopping Example');
+      const [scriptInput, setScriptInput] = useState(DEFAULT_SCRIPT);
+      const [dialogs, setDialogs] = useState([]);
+      const [availableSpeakers, setAvailableSpeakers] = useState(['A', 'B']);
+      
+      const [playMode, setPlayMode] = useState('listen'); 
+      const userRole = playMode === 'listen' ? 'none' : (playMode === 'all' ? 'all' : playMode);
+      
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [currentIndex, setCurrentIndex] = useState(-1);
+      const [status, setStatus] = useState('idle'); 
+      const [userRecords, setUserRecords] = useState({});
+      const [userName, setUserName] = useState('');
+      const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+      
+      const recognitionRef = useRef(null);
+      const isRecognizingRef = useRef(false);
+      const synthRef = useRef(window.speechSynthesis);
+      
+      const currentIndexRef = useRef(currentIndex);
+      const isPlayingRef = useRef(isPlaying);
+      useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+      useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+      const dialogsRef = useRef(dialogs);
+      useEffect(() => { dialogsRef.current = dialogs; }, [dialogs]);
+      const userRoleRef = useRef(userRole);
+      useEffect(() => { userRoleRef.current = userRole; }, [userRole]);
+      const statusRef = useRef(status);
+      useEffect(() => { statusRef.current = status; }, [status]);
+
+      useEffect(() => {
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.getVoices();
+        }
+      }, []);
+
+      const startRecognition = () => {
+        if (recognitionRef.current && !isRecognizingRef.current && playMode !== 'listen') {
+          try { recognitionRef.current.start(); } catch(e) {}
+        }
+      };
+
+      const stopRecognition = () => {
+        if (recognitionRef.current && isRecognizingRef.current) {
+          try { recognitionRef.current.stop(); } catch(e) {}
+        }
+      };
+
+      const abortRecognition = () => {
+        if (recognitionRef.current) {
+          try { recognitionRef.current.abort(); } catch(e) {}
+          isRecognizingRef.current = false;
+        }
+      };
+
+      useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          const recognition = new SpeechRecognition();
+          recognition.lang = 'ja-JP';
+          recognition.continuous = true;
+          recognition.interimResults = false;
+          
+          recognition.onstart = () => {
+            isRecognizingRef.current = true;
+          };
+          
+          recognition.onresult = (event) => {
+            if (!isPlayingRef.current) return;
+            const currentIdx = currentIndexRef.current;
+            const currentLine = dialogsRef.current[currentIdx];
+            
+            const isMyTurn = userRoleRef.current === 'all' || (currentLine && currentLine.speaker === userRoleRef.current);
+            
+            if (statusRef.current === 'listening' && currentLine && isMyTurn) {
+              const resultIndex = event.resultIndex;
+              const text = event.results[resultIndex][0].transcript;
+              
+              if (text.trim()) {
+                setUserRecords(prev => ({...prev, [currentIdx]: text}));
+                setStatus('ready_to_send');
+              }
+            }
+          };
+          
+          recognition.onend = () => {
+            isRecognizingRef.current = false;
+            if (isPlayingRef.current && playMode !== 'listen') {
+              setTimeout(() => {
+                if (isPlayingRef.current) startRecognition();
+              }, 100);
+            }
+          };
+          recognitionRef.current = recognition;
+        }
+        
+        return () => {
+          abortRecognition();
+          synthRef.current.cancel();
+        };
+      }, [playMode]);
+
+      useEffect(() => {
+        if (!isPlaying || dialogs.length === 0) return;
+        if (currentIndex >= dialogs.length) {
+          setIsPlaying(false);
+          setCurrentIndex(-1);
+          setStatus('idle');
+          stopRecognition();
+          return;
+        }
+        const currentLine = dialogs[currentIndex];
+        const el = document.getElementById(`line-${currentIndex}`);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        const isMyTurn = userRole === 'all' || currentLine.speaker === userRole;
+
+        if (!isMyTurn) {
+          setStatus('speaking');
+          playBrowserTTS(currentLine.text);
+        } else {
+          setStatus('listening');
+          startRecognition();
+        }
+      }, [currentIndex, isPlaying, dialogs.length, userRole]);
+
+      const playBrowserTTS = (text) => {
+         synthRef.current.cancel();
+         const utterance = new SpeechSynthesisUtterance(text);
+         utterance.lang = 'ja-JP';
+         utterance.rate = 1.0; 
+         
+         if ('speechSynthesis' in window) {
+           const voices = window.speechSynthesis.getVoices();
+           let selectedVoice = voices.find(v => v.lang.includes('ja') && v.name.includes('Google'));
+           if (!selectedVoice) {
+             selectedVoice = voices.find(v => v.lang.includes('ja')); 
+           }
+           if (selectedVoice) {
+             utterance.voice = selectedVoice;
+           }
+
+           utterance.onend = () => {
+             setStatus('idle');
+             if (isPlayingRef.current) {
+               setTimeout(() => setCurrentIndex(prev => prev + 1), 100);
+             }
+           };
+           utterance.onerror = () => {
+             setStatus('idle');
+             if (isPlayingRef.current) setCurrentIndex(prev => prev + 1);
+           };
+           window.speechSynthesis.speak(utterance);
+         } else {
+           setTimeout(() => {
+             setStatus('idle');
+             if (isPlayingRef.current) setCurrentIndex(prev => prev + 1);
+           }, 2000);
+         }
+      };
+
+      const playSingleLineTTS = (text) => {
+        synthRef.current.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 1.0; 
+        if ('speechSynthesis' in window) {
+          const voices = window.speechSynthesis.getVoices();
+          let selectedVoice = voices.find(v => v.lang.includes('ja') && v.name.includes('Google'));
+          if (!selectedVoice) selectedVoice = voices.find(v => v.lang.includes('ja'));
+          if (selectedVoice) utterance.voice = selectedVoice;
+          window.speechSynthesis.speak(utterance);
+        }
+      };
+
+      const handleLoadScript = () => {
+        const { dialogs: parsedDialogs, speakers } = parseScript(scriptInput);
+        if (parsedDialogs.length > 0) {
+          setDialogs(parsedDialogs);
+          setAvailableSpeakers(speakers);
+          setPlayMode('listen');
+          setAppState('play');
+        }
+      };
+
+      const handleExportApp = () => {
+        const { dialogs: parsedDialogs, speakers } = parseScript(scriptInput);
+        if (parsedDialogs.length === 0) return;
+        
+        const safeDialogsJson = JSON.stringify(parsedDialogs).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+        const safeSpeakersJson = JSON.stringify(speakers).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+        const safeAppTitle = JSON.stringify(appTitle).replace(/</g, '\\u003c').replace(/>/g, '\\u003e');
+
+        const htmlString = generateOfflineAppHtml(safeDialogsJson, safeSpeakersJson, safeAppTitle, appTitle);
+        const blob = new Blob([htmlString], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const safeTitle = appTitle.replace(/[\s\\/:*?"<>|]+/g, '_') || 'Roleplay_App';
+        a.download = `${safeTitle}.html`;
+        a.click();
+      };
+
+      const handleStart = () => {
+        setUserRecords({});
+        setUserName('');
+        setCurrentIndex(0);
+        setIsPlaying(true);
+        if (playMode !== 'listen') {
+          setTimeout(() => startRecognition(), 100);
+        }
+      };
+
+      const handleStop = () => {
+        setIsPlaying(false);
+        setCurrentIndex(-1);
+        setStatus('idle');
+        synthRef.current.cancel();
+        abortRecognition();
+        setIsModeMenuOpen(false);
+      };
+
+      const handleSend = () => {
+        setStatus('idle');
+        if (isPlaying) {
+          setCurrentIndex(prev => prev + 1);
+        }
+      };
+
+      const handleManualNext = () => {
+        synthRef.current.cancel();
+        setCurrentIndex(prev => prev + 1);
+      };
+
+      const handleManualMic = () => {
+        setUserRecords(prev => {
+          const newRecords = {...prev};
+          delete newRecords[currentIndex];
+          return newRecords;
+        });
+        setStatus('listening');
+      };
+
+      const handleDownloadRecord = () => {
+        if (!userName.trim()) {
+          alert("Please enter your name before downloading.");
+          return;
+        }
+
+        const safeTitle = appTitle.replace(/[\s\\/:*?"<>|]+/g, '_') || 'Roleplay';
+        const safeName = userName.replace(/[\s\\/:*?"<>|]+/g, '_');
+        const now = new Date();
+        const dateStr = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+
+        let recordHtml = `<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Role-play Player</title>
-    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8">
+  <title>${appTitle} - Practice Record - ${userName}</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;500;700&display=swap');
+    body { font-family: 'Noto Sans JP', sans-serif; max-width: 800px; margin: 0 auto; padding: 30px; line-height: 1.6; color: #334155; background-color: #f8fafc; }
+    h1 { color: #059669; text-align: center; margin-bottom: 10px; }
+    .header-info { text-align: center; color: #64748b; margin-bottom: 30px; }
+    .record-block { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; background: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); }
+    .speaker { font-weight: bold; color: #94a3b8; font-size: 0.9em; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .target { font-family: 'Klee One', 'UD Digi Kyokasho N-R', serif; font-size: 1.4em; font-weight: 600; margin-bottom: 8px; color: #0f172a; }
+    .actual { background: #ecfdf5; padding: 15px; border-radius: 8px; color: #065f46; margin-top: 15px; border-left: 5px solid #10b981; }
+    .actual strong { font-family: 'Klee One', 'UD Digi Kyokasho N-R', serif; font-size: 1.2em; display: block; margin-top: 5px; }
+    .subtext { font-size: 0.95em; color: #64748b; }
+  </style>
 </head>
-<body class="bg-gray-50 text-gray-800 font-sans">
-    <div id="app" class="min-h-screen flex flex-col items-center justify-center p-4">
-        <div class="w-full max-w-2xl bg-white rounded-xl shadow-lg overflow-hidden flex flex-col h-[750px] relative">
-            
-            <!-- SETUP VIEW -->
-            <div id="setup-view" class="flex flex-col h-full w-full absolute inset-0 bg-white z-10">
-                <div class="bg-emerald-600 p-4 text-white">
-                    <h1 class="text-xl font-bold text-center">Role-play Player</h1>
-                </div>
-                <div class="p-6 flex-1 flex flex-col gap-4 overflow-y-auto">
-                    <div class="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm border border-blue-100 shadow-sm">
-                        <p class="font-bold mb-2 flex items-center gap-2">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" x2="8" y1="13" y2="13"></line><line x1="16" x2="8" y1="17" y2="17"></line><line x1="10" x2="8" y1="9" y2="9"></line></svg> 
-                            How to use
-                        </p>
-                        <p>Write your conversation script below. The app will generate a role-play interface.</p>
-                        <ul class="list-disc pl-5 mt-2 opacity-90 space-y-1">
-                            <li>Use <code>A: </code> and <code>B: </code> to indicate speakers.</li>
-                            <li>Please write in Japanese (Hiragana, Katakana, Kanji).</li>
-                            <li>Use <code>【 】</code> for situational notes or titles.</li>
-                        </ul>
-                    </div>
-                    
-                    <div class="flex-1 flex flex-col">
-                        <label class="text-sm font-bold text-gray-600 mb-1">Your Script:</label>
-                        <textarea id="script-input" class="flex-1 w-full p-4 border-2 border-gray-200 rounded-lg focus:border-emerald-500 focus:outline-none font-mono text-sm resize-none shadow-inner"></textarea>
-                    </div>
-                    
-                    <button id="btn-load-script" onclick="handleLoadScript()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-md transition-all">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                        Generate Role-play
-                    </button>
-                </div>
-            </div>
+<body>
+  <h1>${appTitle} - Practice Record</h1>
+  <div class="header-info">
+    <p><strong>Name:</strong> ${userName} | <strong>Role Played:</strong> ${playMode === 'all' ? 'All Roles' : userRole} | <strong>Date:</strong> ${now.toLocaleString()}</p>
+  </div>
+  <hr style="border:0; height:1px; background:#e2e8f0; margin-bottom: 30px;" />
+  <div>
+`;
 
-            <!-- PLAY VIEW -->
-            <div id="play-view" class="hidden flex-col h-full w-full absolute inset-0 bg-white z-20">
-                <!-- Header -->
-                <div class="bg-emerald-600 p-4 text-white">
-                    <div class="flex items-center justify-between mb-3">
-                        <button onclick="handleEditScript()" class="text-emerald-100 hover:text-white flex items-center gap-1 text-sm font-bold bg-emerald-700/50 px-2 py-1 rounded transition-colors">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>
-                            Edit Script
-                        </button>
-                        <h1 class="text-xl font-bold text-center flex-1 mr-20">Practice</h1>
-                    </div>
-                    
-                    <div class="flex bg-emerald-700 rounded-lg p-1">
-                        <button id="btn-role-a" onclick="handleRoleChange('A')" class="flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                            You are A
-                        </button>
-                        <button id="btn-role-b" onclick="handleRoleChange('B')" class="flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
-                            You are B
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Script Display Area -->
-                <div class="flex-1 overflow-y-auto p-4 bg-[#f0f2f5]">
-                    <div id="dialog-container" class="max-w-md mx-auto">
-                        <!-- Dialogs will be injected here by JavaScript -->
-                    </div>
-                </div>
-
-                <!-- Control Panel -->
-                <div id="control-panel" class="bg-white border-t border-gray-200 p-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-                    <!-- Controls will be injected here by JavaScript -->
-                </div>
-            </div>
-
-        </div>
-    </div>
-
-    <script>
-        // --- Security & Formatting ---
-        const escapeHtml = (unsafe) => {
-            if (!unsafe) return '';
-            return unsafe.toString()
-                 .replace(/&/g, "&amp;")
-                 .replace(/</g, "&lt;")
-                 .replace(/>/g, "&gt;")
-                 .replace(/"/g, "&quot;")
-                 .replace(/'/g, "&#039;");
-        };
-
-        // --- State Management ---
-        let appState = 'setup'; 
-        let dialogs = [];
-        let userRole = 'A';
-        let isPlaying = false;
-        let currentIndex = -1;
-        let status = 'idle'; 
-        let userRecords = {};
-
-        let recognition = null;
-        let synth = window.speechSynthesis;
-        let stepTimeout = null;
-        
-        let sttRetryCount = 0;
-        let isSttActive = false;
-
-        // iOS Bug Fix: Keep utterance in global scope to prevent GC
-        let currentUtterance = null;
-
-        const DEFAULT_SCRIPT = `【Greeting Example】
-A: おはようございます。
-B: おはようございます。
-A: おげんきですか？
-B: はい、げんきです。`;
-
-        // --- Helper: Parse Script ---
-        const parseScript = (scriptText) => {
-            return scriptText.split('\n')
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .map((line, index) => {
-                    if (line.startsWith('【')) return { id: index, speaker: 'system', text: line };
-                    if (line.match(/^[AＡaａ][:：]/)) {
-                        return { id: index, speaker: 'A', text: line.replace(/^[AＡaａ][:：]/, '').trim() };
-                    }
-                    if (line.match(/^[BＢbｂ][:：]/)) {
-                        return { id: index, speaker: 'B', text: line.replace(/^[BＢbｂ][:：]/, '').trim() };
-                    }
-                    return { id: index, speaker: 'system', text: line };
-                });
-        };
-
-        // --- Speech Recognition Init ---
-        function initSTT() {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (SpeechRecognition) {
-                recognition = new SpeechRecognition();
-                recognition.lang = 'ja-JP';
-                recognition.continuous = true;
-                recognition.interimResults = false;
-
-                recognition.onstart = () => {
-                    isSttActive = true;
-                    sttRetryCount = 0;
-                };
-                
-                recognition.onerror = (e) => {
-                    console.warn('Speech Recognition Error:', e.error);
-                    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-                        sttRetryCount = 999; 
-                    }
-                };
-
-                recognition.onresult = (event) => {
-                    if (!isPlaying) return;
-                    const currentLine = dialogs[currentIndex];
-                    if (status === 'listening' && currentLine && currentLine.speaker === userRole) {
-                        const lastResult = event.results[event.results.length - 1];
-                        const text = lastResult[0].transcript;
-                        if (text.trim()) {
-                            userRecords[currentIndex] = text;
-                            setStatus('idle');
-                            updateDialogsUI(); 
-                            if (isPlaying) {
-                                setCurrentIndex(currentIndex + 1);
-                            }
-                        }
-                    }
-                };
-
-                recognition.onend = () => {
-                    isSttActive = false;
-                    if (isPlaying && sttRetryCount < 3) {
-                        sttRetryCount++;
-                        setTimeout(() => {
-                            if (isPlaying && !isSttActive) {
-                                try { recognition.start(); } catch(e){}
-                            }
-                        }, 500);
-                    }
-                };
-            }
-        }
-
-        // --- TTS Helpers ---
-        function getJapaneseVoice() {
-            const voices = synth.getVoices();
-            // Try to find a Japanese voice explicitly
-            return voices.find(v => v.lang.includes('ja') || v.lang.includes('JP')) || null;
-        }
-
-        // --- State Setters ---
-        function setStatus(newStatus) {
-            if (status === newStatus) return;
-            status = newStatus;
-            updateControlsUI();
-        }
-
-        function setIsPlaying(val) {
-            if (isPlaying === val) return;
-            isPlaying = val;
-            updateUI();
-        }
-
-        function setCurrentIndex(newIndex) {
-            const prevIndex = currentIndex;
-            currentIndex = newIndex;
-            if (prevIndex !== currentIndex) {
-                updateDialogsUI();
-                updateControlsUI();
-                processCurrentStep();
-            }
-        }
-
-        // --- Core Progression Logic ---
-        function processCurrentStep() {
-            clearTimeout(stepTimeout);
-            if (!isPlaying || dialogs.length === 0 || currentIndex < 0) return;
-
-            if (currentIndex >= dialogs.length) {
-                setIsPlaying(false);
-                setCurrentIndex(-1);
-                setStatus('idle');
-                try { recognition.abort(); } catch(e){}
-                return;
-            }
-
-            const currentLine = dialogs[currentIndex];
-            if (!currentLine) return;
-
-            setTimeout(() => {
-                const el = document.getElementById(`line-wrapper-${currentIndex}`);
-                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }, 50);
-
-            if (currentLine.speaker === 'system') {
-                stepTimeout = setTimeout(() => {
-                    if (isPlaying) setCurrentIndex(currentIndex + 1);
-                }, 600);
-                return;
-            }
-
-            if (currentLine.speaker !== userRole) {
-                // AI Turn
-                setStatus('speaking');
-                
-                currentUtterance = new SpeechSynthesisUtterance(currentLine.text);
-                currentUtterance.lang = 'ja-JP';
-                currentUtterance.rate = 1.0;
-                
-                const jpVoice = getJapaneseVoice();
-                if (jpVoice) currentUtterance.voice = jpVoice;
-                
-                currentUtterance.onend = () => {
-                    setStatus('idle');
-                    if (isPlaying) {
-                        stepTimeout = setTimeout(() => setCurrentIndex(currentIndex + 1), 100);
-                    }
-                };
-                
-                currentUtterance.onerror = () => {
-                    setStatus('idle');
-                    if (isPlaying) {
-                        stepTimeout = setTimeout(() => setCurrentIndex(currentIndex + 1), 500);
-                    }
-                };
-
-                synth.speak(currentUtterance);
-            } else {
-                // User Turn
-                setStatus('listening');
-            }
-        }
-
-        // --- UI Updaters ---
-        function updateUI() {
-            const setupView = document.getElementById('setup-view');
-            const playView = document.getElementById('play-view');
-            if (appState === 'setup') {
-                setupView.classList.remove('hidden');
-                setupView.classList.add('flex');
-                playView.classList.add('hidden');
-                playView.classList.remove('flex');
-            } else {
-                setupView.classList.add('hidden');
-                setupView.classList.remove('flex');
-                playView.classList.remove('hidden');
-                playView.classList.add('flex');
-                const btnA = document.getElementById('btn-role-a');
-                const btnB = document.getElementById('btn-role-b');
-                btnA.className = `flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors ${userRole === 'A' ? 'bg-white text-emerald-700 shadow' : 'text-emerald-100 hover:bg-emerald-600'}`;
-                btnB.className = `flex-1 py-2 text-sm font-bold rounded flex justify-center items-center gap-2 transition-colors ${userRole === 'B' ? 'bg-white text-emerald-700 shadow' : 'text-emerald-100 hover:bg-emerald-600'}`;
-                btnA.disabled = isPlaying;
-                btnB.disabled = isPlaying;
-                updateDialogsUI();
-                updateControlsUI();
-            }
-        }
-
-        function renderDialogsInitial() {
-            const container = document.getElementById('dialog-container');
-            container.innerHTML = '';
-            dialogs.forEach((line, idx) => {
-                const div = document.createElement('div');
-                div.id = `line-wrapper-${idx}`;
-                container.appendChild(div);
-            });
-            const padding = document.createElement('div');
-            padding.className = 'h-32';
-            container.appendChild(padding);
-            updateDialogsUI();
-        }
-
-        function updateDialogsUI() {
-            dialogs.forEach((line, idx) => {
-                const wrapper = document.getElementById(`line-wrapper-${idx}`);
-                if (!wrapper) return;
-                const isCurrent = idx === currentIndex;
-                const isPast = idx < currentIndex;
-                const isMyRole = line.speaker === userRole;
-                const opacityClass = (isPlaying && !isCurrent && !isPast) ? 'opacity-30' : 'opacity-100';
-
-                if (line.speaker === 'system') {
-                    wrapper.className = `text-center my-4 font-bold text-gray-500 text-sm transition-opacity ${opacityClass}`;
-                    wrapper.innerHTML = escapeHtml(line.text);
-                    return;
-                }
-
-                const myRoleBg = isMyRole 
-                    ? (isCurrent ? 'bg-green-500 text-white ring-4 ring-green-200' : 'bg-green-400 text-white') 
-                    : (isCurrent ? 'bg-white text-gray-800 ring-4 ring-blue-100' : 'bg-white text-gray-800');
-
-                const recordHtml = (isMyRole && userRecords[idx]) ? `
-                    <div class="mt-2 pt-2 border-t border-green-300 text-sm bg-green-600/30 rounded p-2 text-white">
-                        <span class="text-xs opacity-80 block mb-1">Your pronunciation:</span>
-                        <div class="font-medium">${escapeHtml(userRecords[idx])}</div>
-                    </div>
-                ` : '';
-
-                const bounceHtml = isCurrent ? `
-                    <div class="absolute -left-8 top-1/2 -translate-y-1/2 text-xl animate-bounce">
-                        ${isMyRole ? '🎤' : '🗣️'}
-                    </div>
-                ` : '';
-
-                wrapper.innerHTML = `
-                    <div class="flex w-full mb-4 ${isMyRole ? 'justify-end' : 'justify-start'} transition-opacity duration-300 ${opacityClass}">
-                        <div class="max-w-[80%] rounded-2xl px-4 py-3 relative shadow-sm ${myRoleBg}">
-                            <div class="text-xs font-bold mb-1 ${isMyRole ? 'text-green-100' : 'text-gray-400'}">
-                                ${escapeHtml(line.speaker)} ${isMyRole ? '(You)' : ''}
-                            </div>
-                            <div class="text-lg leading-relaxed font-medium tracking-wide">${escapeHtml(line.text)}</div>
-                            ${recordHtml}${bounceHtml}
-                        </div>
-                    </div>
-                `;
-            });
-        }
-
-        function updateControlsUI() {
-            const panel = document.getElementById('control-panel');
-            if (!isPlaying) {
-                panel.innerHTML = `
-                    <button onclick="handleStart()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg text-lg transition-transform hover:scale-[1.02]">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                        Start Role-play
-                    </button>
-                `;
-            } else {
-                let statusHTML = status === 'speaking' ? '<span class="text-blue-500">AI is speaking... 🗣️</span>' : 
-                                 status === 'listening' ? '<span class="text-red-500 animate-pulse">Your turn! Please speak 🎤</span>' : '<span>Ready...</span>';
-                const currentLine = dialogs[currentIndex];
-                const isMyTurn = currentLine && currentLine.speaker === userRole;
-                let controlsHtml = `<button onclick="handleStop()" class="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"></rect></svg>Stop</button>`;
-                if (isMyTurn) {
-                    controlsHtml += (status === 'idle' ? `<button onclick="handleManualMic()" class="flex-1 bg-red-100 text-red-600 border border-red-300 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>Again</button>` : '') + 
-                                     `<button onclick="handleManualNext()" class="flex-1 bg-blue-100 hover:bg-blue-200 text-blue-700 font-bold py-3 rounded-xl flex items-center justify-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5"><polygon points="5 4 15 12 5 20 5 4"></polygon><line x1="19" x2="19" y1="5" y2="19"></line></svg>Skip</button>`;
-                }
-                panel.innerHTML = `<div class="flex flex-col gap-3"><div class="text-center font-bold text-gray-600 h-6">${statusHTML}</div><div class="flex gap-2">${controlsHtml}</div></div>`;
-            }
-        }
-
-        // --- Event Handlers ---
-        function handleLoadScript() {
-            const text = document.getElementById('script-input').value;
-            const parsed = parseScript(text);
-            if (parsed.length > 0) {
-                dialogs = parsed; appState = 'play'; userRecords = {};
-                setIsPlaying(false); currentIndex = -1; status = 'idle';
-                renderDialogsInitial(); updateUI();
-            }
-        }
-        function handleEditScript() { handleStop(); appState = 'setup'; updateUI(); }
-        
-        function handleStart() {
-            // iOS Fix: Unlock Speech Synthesis on user interaction
-            const unlockUtterance = new SpeechSynthesisUtterance("");
-            synth.speak(unlockUtterance);
-
-            userRecords = {};
-            sttRetryCount = 0;
-            try { recognition.start(); } catch(e){}
-            setIsPlaying(true);
-            setCurrentIndex(0);
-        }
-        
-        function handleStop() { setIsPlaying(false); currentIndex = -1; status = 'idle'; synth.cancel(); try { recognition.abort(); } catch(e){} }
-        function handleManualNext() { synth.cancel(); setCurrentIndex(currentIndex + 1); }
-        function handleManualMic() { try { recognition.stop(); setTimeout(() => recognition.start(), 100); } catch(e){} }
-        function handleRoleChange(role) { if (isPlaying) return; userRole = role; updateUI(); }
-
-        window.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('script-input').value = DEFAULT_SCRIPT;
-            initSTT(); updateUI();
-            document.getElementById('script-input').addEventListener('input', (e) => {
-                const btn = document.getElementById('btn-load-script');
-                const isEmpty = e.target.value.trim() === '';
-                btn.disabled = isEmpty;
-                btn.classList.toggle('opacity-50', isEmpty);
-                btn.classList.toggle('cursor-not-allowed', isEmpty);
-            });
+        dialogs.forEach((d, i) => {
+          const isMyRole = playMode === 'all' || d.speaker === userRole;
+          recordHtml += `<div class="record-block">`;
+          recordHtml += `<div class="speaker">${d.speaker} ${isMyRole ? '(You)' : ''}</div>`;
+          recordHtml += `<div class="target">${d.text}</div>`;
+          if (d.subTexts && d.subTexts.length > 0) {
+            recordHtml += `<div class="subtext">${d.subTexts.join('<br>')}</div>`;
+          }
+          if (isMyRole && userRecords[i]) {
+            recordHtml += `<div class="actual"><span style="font-size:0.85em; opacity:0.8;">🎤 Recognized:</span><strong>${userRecords[i]}</strong></div>`;
+          }
+          recordHtml += `</div>`;
         });
-    </script>
+
+        recordHtml += `
+  </div>
+</body>
+</html>`;
+
+        const blob = new Blob([recordHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${safeTitle}_Record_${safeName}_${dateStr}.html`;
+        a.click();
+      };
+
+      return (
+        <>
+          {appState === 'setup' && (
+            <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-8 font-ui text-slate-800">
+              <div className="w-full max-w-3xl bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[100dvh] sm:h-[90vh] sm:max-h-[900px]">
+                <div className="bg-emerald-600 p-6 sm:p-8 text-white">
+                  <h1 className="text-2xl sm:text-3xl font-bold text-center tracking-wide">Role-play Generator</h1>
+                  <p className="text-center text-emerald-100 mt-2 text-sm sm:text-base">Create your conversational practice app</p>
+                </div>
+                
+                <div className="p-6 sm:p-10 flex-1 flex flex-col gap-6 overflow-y-auto">
+                  <div className="bg-emerald-50 text-emerald-800 p-5 rounded-2xl border border-emerald-100 shadow-sm">
+                    <p className="font-bold mb-3 flex items-center gap-2 text-base"><span className="text-xl">📄</span> How to use</p>
+                    <ol className="list-decimal pl-6 opacity-90 space-y-2 text-sm sm:text-base">
+                      <li>Input the Title of your role-play.</li>
+                      <li>Input your conversation script below.<br/>
+                          <span className="text-xs text-emerald-700 bg-emerald-100/50 px-2 py-0.5 rounded">💡 You can easily copy and paste a script created by the GEM.</span>
+                      </li>
+                      <li>Use <code>A:</code> and <code>B:</code> to specify speakers, <strong>OR</strong> leave a blank line between turns.</li>
+                    </ol>
+                  </div>
+                  
+                  <div className="flex flex-col">
+                    <label className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Title</label>
+                    <input 
+                      type="text"
+                      className="w-full p-4 border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-ui text-sm sm:text-base shadow-inner transition-all bg-slate-50 focus:bg-white"
+                      value={appTitle}
+                      onChange={(e) => setAppTitle(e.target.value)}
+                      placeholder="e.g. Shopping Example"
+                    />
+                  </div>
+
+                  <div className="flex-1 flex flex-col min-h-[250px]">
+                    <label className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Your Script</label>
+                    <textarea 
+                      className="flex-1 w-full p-5 border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-mono text-sm sm:text-base resize-none shadow-inner transition-all leading-relaxed bg-slate-50 focus:bg-white"
+                      value={scriptInput}
+                      onChange={(e) => setScriptInput(e.target.value)}
+                      placeholder="A: こんにちは！&#10;Hello!&#10;&#10;B: おはようございます。&#10;Good morning."
+                    />
+                  </div>
+                  
+                  <div className="flex flex-col sm:flex-row gap-4 mt-2">
+                    <button 
+                      onClick={handleLoadScript}
+                      disabled={!scriptInput.trim()}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-500 hover:-translate-y-1 text-white font-bold py-5 px-6 rounded-2xl shadow-lg shadow-emerald-600/30 transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 text-lg flex items-center justify-center gap-2"
+                    >
+                      <span className="text-2xl">▶️</span> Preview / Practice Here
+                    </button>
+                    <button 
+                      onClick={handleExportApp}
+                      disabled={!scriptInput.trim()}
+                      className="flex-1 bg-indigo-600 hover:bg-indigo-500 hover:-translate-y-1 text-white font-bold py-5 px-6 rounded-2xl shadow-lg shadow-indigo-600/30 transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 text-lg flex items-center justify-center gap-2"
+                    >
+                      <span className="text-2xl">📥</span> Download Offline App
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {appState === 'play' && (
+            <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center sm:p-8 font-ui text-slate-800">
+              <div className="w-full max-w-3xl bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[100dvh] sm:h-[90vh] sm:max-h-[900px]">
+                
+                {/* Header - Responsive Layout */}
+                <div className="bg-emerald-600 px-4 py-3 sm:px-5 sm:py-4 text-white shadow-md z-20 flex items-center gap-3">
+                  <button 
+                    onClick={() => { handleStop(); setAppState('setup'); }}
+                    className="flex-shrink-0 text-emerald-100 hover:text-white flex items-center justify-center w-10 h-10 rounded-full hover:bg-emerald-700 transition-colors"
+                    title="Back to Edit"
+                  >
+                    <span className="text-xl">⬅️</span>
+                  </button>
+                  
+                  <h1 className="flex-1 text-base sm:text-lg font-bold text-center text-white truncate drop-shadow-sm px-1">
+                    {appTitle || 'Role-play Practice'}
+                  </h1>
+                  
+                  <div className="relative flex-shrink-0">
+                    <button 
+                      onClick={() => setIsModeMenuOpen(!isModeMenuOpen)} 
+                      disabled={isPlaying}
+                      className="bg-emerald-800/40 hover:bg-emerald-800/60 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl flex items-center gap-1.5 sm:gap-2 text-white font-bold text-xs sm:text-sm transition-all disabled:opacity-50"
+                    >
+                      <span className="whitespace-nowrap">
+                        {playMode === 'listen' ? '🎧 Listen' : playMode === 'all' ? '🎭 All Roles' : `👤 Role ${playMode}`}
+                      </span>
+                      <span className={'text-[10px] transform transition-transform ' + (isModeMenuOpen ? 'rotate-180' : '')}>▼</span>
+                    </button>
+                    
+                    {isModeMenuOpen && (
+                      <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl overflow-hidden z-50 border border-emerald-100 flex flex-col text-slate-800">
+                        <button onClick={() => { setPlayMode('listen'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'listen' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎧 Just Listen</button>
+                        <div className="h-px bg-slate-100 mx-2"></div>
+                        <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
+                        {availableSpeakers.map(spk => (
+                          <React.Fragment key={spk}>
+                            <div className="h-px bg-slate-100 mx-2"></div>
+                            <button onClick={() => { setPlayMode(spk); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === spk ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>👤 Play Role {spk}</button>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Script Display Area */}
+                <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 bg-slate-100">
+                  <div className="max-w-2xl mx-auto w-full">
+
+                    {dialogs.map((line, idx) => {
+                      const isCurrent = idx === currentIndex;
+                      const isPast = idx < currentIndex;
+                      const isMyRole = playMode === 'all' || line.speaker === userRole;
+                      const isLeftSide = (playMode === 'listen' || playMode === 'all') ? line.speaker !== availableSpeakers[0] : line.speaker !== userRole;
+
+                      return (
+                        <div key={idx} id={`line-${idx}`} className={`flex w-full mb-6 sm:mb-8 ${isLeftSide ? 'justify-start' : 'justify-end'} transition-opacity duration-500 ${isPlaying && !isCurrent && !isPast ? 'opacity-30 grayscale-[50%]' : 'opacity-100'}`}>
+                          <div className={`max-w-[85%] sm:max-w-[75%] rounded-[2rem] px-5 py-4 sm:px-7 sm:py-5 relative shadow-md group transition-all duration-300 ${
+                              isMyRole 
+                                ? (isCurrent ? 'bg-emerald-500 text-white ring-4 ring-emerald-200 shadow-emerald-500/30' : 'bg-emerald-400 text-white') 
+                                : (isCurrent ? 'bg-white text-slate-800 ring-4 ring-slate-200 shadow-slate-200' : 'bg-white text-slate-800')
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <div className={`text-xs sm:text-sm font-bold uppercase tracking-wider ${isMyRole ? 'text-emerald-100' : 'text-slate-400'}`}>
+                                {line.speaker} {isMyRole ? '(You)' : ''}
+                              </div>
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); playSingleLineTTS(line.text); }} 
+                                className={`p-1.5 rounded-full hover:bg-black/10 transition-colors ${isMyRole ? 'text-emerald-100' : 'text-slate-400'}`} 
+                                title="Listen to this line"
+                              >
+                                🔊
+                              </button>
+                            </div>
+                            
+                            <div className="cursor-pointer">
+                              <div className={`font-kyokasho text-xl sm:text-2xl font-semibold leading-relaxed tracking-wide transition-all duration-500 ${isMyRole ? 'blur-[6px] group-hover:blur-none' : ''}`}>
+                                {line.text}
+                              </div>
+                              {line.subTexts && line.subTexts.length > 0 && (
+                                <div className={`mt-3 pt-3 border-t text-sm sm:text-base ${isMyRole ? 'border-emerald-300/40 text-emerald-50' : 'border-slate-100 text-slate-500'}`}>
+                                  {line.subTexts.map((st, i) => {
+                                    const isRomaji = i === 0;
+                                    return (
+                                      <div key={i} className={`mb-1.5 last:mb-0 leading-snug transition-all duration-500 ${isMyRole && isRomaji ? 'blur-[5px] group-hover:blur-none' : ''}`}>
+                                        {st}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                            
+                            {isMyRole && userRecords[idx] && (
+                              <div className="mt-4 pt-4 border-t border-emerald-300/50 bg-emerald-700/20 rounded-xl p-4 text-white">
+                                <span className="text-xs uppercase tracking-wider opacity-80 block mb-1.5 font-ui">Recognized:</span>
+                                <div className="font-kyokasho font-semibold text-xl leading-relaxed">{userRecords[idx]}</div>
+                              </div>
+                            )}
+
+                            {isMyRole && isCurrent && status === 'ready_to_send' && userRecords[idx] && (
+                              <div className="mt-4 flex gap-3 justify-end font-ui">
+                                <button onClick={handleManualMic} className="px-4 py-2 text-sm font-bold bg-white/20 hover:bg-white/30 rounded-xl transition-colors flex items-center gap-1.5">
+                                  🎤 Retry
+                                </button>
+                                <button onClick={handleSend} className="px-5 py-2 text-sm font-bold bg-white text-emerald-700 hover:bg-emerald-50 rounded-xl shadow-sm transition-colors flex items-center gap-1.5">
+                                  ⏭️ Send
+                                </button>
+                              </div>
+                            )}
+                            
+                            {isCurrent && status !== 'ready_to_send' && (
+                              <div className={`absolute ${isLeftSide ? '-right-10' : '-left-10'} top-1/2 -translate-y-1/2 text-3xl animate-bounce drop-shadow-md`}>
+                                {isMyRole ? '🎤' : '🗣️'}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="h-10"></div>
+                  </div>
+                </div>
+
+                {/* Controls (Footer) */}
+                <div className="bg-white border-t border-slate-200 p-4 sm:p-5 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.05)] z-10">
+                  {!isPlaying && Object.keys(userRecords).length === 0 ? (
+                    <button onClick={handleStart} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 sm:py-4 rounded-xl shadow-md transition-all text-lg flex justify-center items-center gap-2">
+                      <span className="text-xl">▶️</span> Start Role-play
+                    </button>
+                  ) : !isPlaying ? (
+                    <div className="flex flex-col gap-3">
+                      <button onClick={handleStart} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl shadow-sm transition-all text-base flex justify-center items-center gap-2">
+                        <span className="text-lg">▶️</span> Play Again
+                      </button>
+                      {playMode !== 'listen' && (
+                        <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100/50 flex flex-col sm:flex-row gap-3 items-center">
+                          <span className="font-bold text-indigo-800 text-sm whitespace-nowrap"><span className="text-base mr-1">💾</span> Save Record</span>
+                          <input 
+                            type="text" 
+                            placeholder="Your name" 
+                            value={userName}
+                            onChange={(e) => setUserName(e.target.value)}
+                            className="flex-1 w-full p-2.5 bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm"
+                          />
+                          <button 
+                            onClick={handleDownloadRecord}
+                            className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-lg shadow-md transition-all text-sm whitespace-nowrap"
+                          >
+                            Download
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col gap-4">
+                      <div className="text-center font-bold text-slate-600 h-6 text-sm sm:text-base">
+                        {status === 'speaking' && <span className="text-blue-500 tracking-wide">AI is speaking... 🗣️</span>}
+                        {status === 'listening' && <span className="text-rose-500 animate-pulse tracking-wide">Your turn! Please speak 🎤</span>}
+                        {status === 'ready_to_send' && <span className="text-emerald-600 tracking-wide">Review and click Send 👆</span>}
+                        {status === 'idle' && <span className="tracking-wide text-slate-400">Ready...</span>}
+                      </div>
+                      <div className="flex gap-3">
+                        <button onClick={handleStop} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
+                          <span className="text-base">⏹️</span> Stop
+                        </button>
+                        {(playMode === 'all' || dialogs[currentIndex]?.speaker === userRole) && (
+                          <>
+                            {status === 'idle' && (
+                              <button onClick={handleManualMic} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
+                                <span className="text-base">🎤</span> Speak Again
+                              </button>
+                            )}
+                            <button onClick={handleManualNext} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
+                              <span className="text-base">⏭️</span> Skip
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      );
+    }
+
+    const generateOfflineAppHtml = (safeDialogsJson, safeSpeakersJson, safeAppTitle, rawAppTitle) => {
+      const htmlTitle = rawAppTitle.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${htmlTitle} - Role-play Practice</title>
+  <script src="https://cdn.tailwindcss.com"><\/script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"><\/script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"><\/script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"><\/script>
+  <link href="https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    .font-kyokasho { font-family: 'Klee One', 'UD Digi Kyokasho N-R', 'Yu Mincho', serif; }
+    .font-ui { font-family: 'Noto Sans JP', sans-serif; }
+  </style>
+</head>
+<body class="bg-slate-50 font-ui text-slate-800">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+    const initialDialogs = ${safeDialogsJson};
+    const availableSpeakers = ${safeSpeakersJson};
+    const appTitle = ${safeAppTitle};
+
+    function App() {
+      const dialogs = initialDialogs;
+      const [playMode, setPlayMode] = useState('listen');
+      const userRole = playMode === 'listen' ? 'none' : (playMode === 'all' ? 'all' : playMode);
+      
+      const [isPlaying, setIsPlaying] = useState(false);
+      const [currentIndex, setCurrentIndex] = useState(-1);
+      const [status, setStatus] = useState('idle');
+      const [userRecords, setUserRecords] = useState({});
+      const [userName, setUserName] = useState('');
+      const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+      
+      const recognitionRef = useRef(null);
+      const isRecognizingRef = useRef(false);
+      const synthRef = useRef(window.speechSynthesis);
+      
+      const currentIndexRef = useRef(currentIndex);
+      const isPlayingRef = useRef(isPlaying);
+      useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+      useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+      const statusRef = useRef(status);
+      useEffect(() => { statusRef.current = status; }, [status]);
+      const userRoleRef = useRef(userRole);
+      useEffect(() => { userRoleRef.current = userRole; }, [userRole]);
+
+      useEffect(() => { if ('speechSynthesis' in window) window.speechSynthesis.getVoices(); }, []);
+
+      const startRecognition = () => {
+        if (recognitionRef.current && !isRecognizingRef.current && playMode !== 'listen') {
+          try { recognitionRef.current.start(); } catch(e) {}
+        }
+      };
+
+      const stopRecognition = () => {
+        if (recognitionRef.current && isRecognizingRef.current) {
+          try { recognitionRef.current.stop(); } catch(e) {}
+        }
+      };
+
+      const abortRecognition = () => {
+        if (recognitionRef.current) {
+          try { recognitionRef.current.abort(); } catch(e) {}
+          isRecognizingRef.current = false;
+        }
+      };
+
+      useEffect(() => {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+          const recognition = new SpeechRecognition();
+          recognition.lang = 'ja-JP';
+          recognition.continuous = true;
+          recognition.interimResults = false;
+          
+          recognition.onstart = () => { isRecognizingRef.current = true; };
+          
+          recognition.onresult = (event) => {
+            if (!isPlayingRef.current) return;
+            const currentIdx = currentIndexRef.current;
+            const currentLine = dialogs[currentIdx];
+            
+            const isMyTurn = userRoleRef.current === 'all' || (currentLine && currentLine.speaker === userRoleRef.current);
+
+            if (statusRef.current === 'listening' && currentLine && isMyTurn) {
+              const text = event.results[event.resultIndex][0].transcript;
+              if (text.trim()) {
+                setUserRecords(prev => ({...prev, [currentIdx]: text}));
+                setStatus('ready_to_send');
+              }
+            }
+          };
+          
+          recognition.onend = () => {
+            isRecognizingRef.current = false;
+            if (isPlayingRef.current && playMode !== 'listen') {
+              setTimeout(() => {
+                if (isPlayingRef.current && statusRef.current === 'listening') startRecognition();
+              }, 100);
+            }
+          };
+          recognitionRef.current = recognition;
+        }
+        return () => { abortRecognition(); synthRef.current.cancel(); };
+      }, [playMode]);
+
+      useEffect(() => {
+        if (!isPlaying || dialogs.length === 0) return;
+        if (currentIndex >= dialogs.length) {
+          setIsPlaying(false);
+          setCurrentIndex(-1);
+          setStatus('idle');
+          stopRecognition();
+          return;
+        }
+        const currentLine = dialogs[currentIndex];
+        const el = document.getElementById('line-' + currentIndex);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        const isMyTurn = userRole === 'all' || currentLine.speaker === userRole;
+
+        if (!isMyTurn) {
+          setStatus('speaking');
+          playBrowserTTS(currentLine.text);
+        } else {
+          setStatus('listening');
+          startRecognition();
+        }
+      }, [currentIndex, isPlaying, dialogs.length, userRole]);
+
+      const playBrowserTTS = (text) => {
+        synthRef.current.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 1.0; 
+        if ('speechSynthesis' in window) {
+          const voices = window.speechSynthesis.getVoices();
+          let selectedVoice = voices.find(v => v.lang.includes('ja') && v.name.includes('Google'));
+          if (!selectedVoice) selectedVoice = voices.find(v => v.lang.includes('ja'));
+          if (selectedVoice) utterance.voice = selectedVoice;
+          
+          utterance.onend = () => {
+            setStatus('idle');
+            if (isPlayingRef.current) setTimeout(() => setCurrentIndex(prev => prev + 1), 100);
+          };
+          utterance.onerror = () => {
+            setStatus('idle');
+            if (isPlayingRef.current) setCurrentIndex(prev => prev + 1);
+          };
+          window.speechSynthesis.speak(utterance);
+        } else {
+          setTimeout(() => { setStatus('idle'); if(isPlayingRef.current) setCurrentIndex(prev => prev + 1); }, 2000);
+        }
+      };
+
+      const playSingleLineTTS = (text) => {
+        synthRef.current.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'ja-JP';
+        utterance.rate = 1.0; 
+        if ('speechSynthesis' in window) {
+          const voices = window.speechSynthesis.getVoices();
+          let selectedVoice = voices.find(v => v.lang.includes('ja') && v.name.includes('Google'));
+          if (!selectedVoice) selectedVoice = voices.find(v => v.lang.includes('ja'));
+          if (selectedVoice) utterance.voice = selectedVoice;
+          window.speechSynthesis.speak(utterance);
+        }
+      };
+
+      const handleStart = () => { 
+        setUserRecords({}); setUserName(''); setCurrentIndex(0); setIsPlaying(true); 
+        if (playMode !== 'listen') setTimeout(() => startRecognition(), 100);
+      };
+      
+      const handleStop = () => { setIsPlaying(false); setCurrentIndex(-1); setStatus('idle'); synthRef.current.cancel(); stopRecognition(); setIsModeMenuOpen(false); };
+      const handleSend = () => { setStatus('idle'); if (isPlaying) setCurrentIndex(prev => prev + 1); };
+      const handleManualNext = () => { synthRef.current.cancel(); setCurrentIndex(prev => prev + 1); };
+      const handleManualMic = () => {
+        setUserRecords(prev => { const n = {...prev}; delete n[currentIndex]; return n; });
+        setStatus('listening');
+      };
+
+      const handleDownloadRecord = () => {
+        if (!userName.trim()) { alert("Please enter your name before downloading."); return; }
+        const safeTitle = appTitle.replace(/[\\\\s\\\\/:*?"<>|]+/g, '_') || 'Roleplay';
+        const safeName = userName.replace(/[\\\\s\\\\/:*?"<>|]+/g, '_');
+        const now = new Date();
+        const dateStr = now.getFullYear() + String(now.getMonth()+1).padStart(2,'0') + String(now.getDate()).padStart(2,'0') + '_' + String(now.getHours()).padStart(2,'0') + String(now.getMinutes()).padStart(2,'0');
+        
+        let recordHtml = "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><title>" + appTitle.replace(/</g, '&lt;').replace(/>/g, '&gt;') + " - Practice Record - " + userName.replace(/</g, '&lt;').replace(/>/g, '&gt;') + "</title><style>@import url('https://fonts.googleapis.com/css2?family=Klee+One:wght@400;600&family=Noto+Sans+JP:wght@400;500;700&display=swap'); body { font-family: 'Noto Sans JP', sans-serif; max-width: 800px; margin: 0 auto; padding: 30px; line-height: 1.6; color: #334155; background-color: #f8fafc; } h1 { color: #059669; text-align: center; margin-bottom: 10px; } .header-info { text-align: center; color: #64748b; margin-bottom: 30px; } .record-block { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; margin-bottom: 20px; background: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); } .speaker { font-weight: bold; color: #94a3b8; font-size: 0.9em; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em; } .target { font-family: 'Klee One', 'UD Digi Kyokasho N-R', serif; font-size: 1.4em; font-weight: 600; margin-bottom: 8px; color: #0f172a; } .actual { background: #ecfdf5; padding: 15px; border-radius: 8px; color: #065f46; margin-top: 15px; border-left: 5px solid #10b981; } .actual strong { font-family: 'Klee One', 'UD Digi Kyokasho N-R', serif; font-size: 1.2em; display: block; margin-top: 5px; } .subtext { font-size: 0.95em; color: #64748b; }</style></head><body><h1>" + appTitle.replace(/</g, '&lt;').replace(/>/g, '&gt;') + " - Practice Record</h1><div class='header-info'><p><strong>Name:</strong> " + userName.replace(/</g, '&lt;').replace(/>/g, '&gt;') + " | <strong>Role Played:</strong> " + (playMode === 'all' ? 'All Roles' : userRole) + " | <strong>Date:</strong> " + new Date().toLocaleString() + "</p></div><hr style='border:0; height:1px; background:#e2e8f0; margin-bottom: 30px;'/><div>";
+        dialogs.forEach((d, i) => {
+          const isMyRole = playMode === 'all' || d.speaker === userRole;
+          recordHtml += "<div class='record-block'><div class='speaker'>" + d.speaker + (isMyRole ? ' (You)' : '') + "</div><div class='target'>" + d.text + "</div>";
+          if (d.subTexts && d.subTexts.length > 0) recordHtml += "<div class='subtext'>" + d.subTexts.join('<br>') + "</div>";
+          if (isMyRole && userRecords[i]) recordHtml += "<div class='actual'><span style='font-size:0.85em; opacity:0.8;'>🎤 Recognized:</span><strong>" + userRecords[i] + "</strong></div>";
+          recordHtml += "</div>";
+        });
+        recordHtml += "</div></body></html>";
+        const blob = new Blob([recordHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = safeTitle + '_Record_' + safeName + '_' + dateStr + '.html';
+        a.click();
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-8">
+          <div className="w-full max-w-3xl bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[100dvh] sm:h-[90vh] sm:max-h-[900px]">
+            
+            {/* Header */}
+            <div className="bg-emerald-600 px-4 py-3 sm:px-5 sm:py-4 text-white shadow-md z-20 flex items-center gap-3">
+              <h1 className="flex-1 text-base sm:text-lg font-bold text-white truncate drop-shadow-sm px-1">
+                {appTitle}
+              </h1>
+              
+              <div className="relative flex-shrink-0">
+                <button 
+                  onClick={() => setIsModeMenuOpen(!isModeMenuOpen)} 
+                  disabled={isPlaying}
+                  className="bg-emerald-800/40 hover:bg-emerald-800/60 px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl flex items-center gap-1.5 sm:gap-2 text-white font-bold text-xs sm:text-sm transition-all disabled:opacity-50"
+                >
+                  <span className="whitespace-nowrap">
+                    {playMode === 'listen' ? '🎧 Listen' : playMode === 'all' ? '🎭 All Roles' : '👤 Role ' + playMode}
+                  </span>
+                  <span className={'text-[10px] transform transition-transform ' + (isModeMenuOpen ? 'rotate-180' : '')}>▼</span>
+                </button>
+                
+                {isModeMenuOpen && (
+                  <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl overflow-hidden z-50 border border-emerald-100 flex flex-col text-slate-800">
+                    <button onClick={() => { setPlayMode('listen'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'listen' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎧 Just Listen</button>
+                    <div className="h-px bg-slate-100 mx-2"></div>
+                    <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
+                    {availableSpeakers.map(spk => (
+                      <React.Fragment key={spk}>
+                        <div className="h-px bg-slate-100 mx-2"></div>
+                        <button onClick={() => { setPlayMode(spk); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === spk ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>👤 Play Role {spk}</button>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Script Display */}
+            <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 bg-slate-100">
+              <div className="max-w-2xl mx-auto w-full">
+                {!isPlaying && Object.keys(userRecords).length === 0 && (
+                  <div className="my-10 flex justify-center animate-fade-in">
+                    <button onClick={handleStart} className="w-full max-w-sm bg-emerald-600 hover:bg-emerald-500 hover:-translate-y-1 text-white font-bold py-5 px-8 rounded-2xl shadow-xl shadow-emerald-600/20 text-xl transition-all duration-300 flex items-center justify-center gap-3">
+                      <span className="text-2xl">▶️</span> Start Role-play
+                    </button>
+                  </div>
+                )}
+                {dialogs.map((line, idx) => {
+                  const isCurrent = idx === currentIndex;
+                  const isPast = idx < currentIndex;
+                  const isMyRole = playMode === 'all' || line.speaker === userRole;
+                  const isLeftSide = (playMode === 'listen' || playMode === 'all') ? line.speaker !== availableSpeakers[0] : line.speaker !== userRole;
+
+                  return (
+                    <div key={idx} id={'line-'+idx} className={"flex w-full mb-6 sm:mb-8 " + (isLeftSide ? 'justify-start' : 'justify-end') + " transition-opacity duration-500 " + (isPlaying && !isCurrent && !isPast ? 'opacity-30 grayscale-[50%]' : 'opacity-100')}>
+                      <div className={"max-w-[85%] sm:max-w-[75%] rounded-[2rem] px-5 py-4 sm:px-7 sm:py-5 relative shadow-md group transition-all duration-300 " + (isMyRole ? (isCurrent ? 'bg-emerald-500 text-white ring-4 ring-emerald-200 shadow-emerald-500/30' : 'bg-emerald-400 text-white') : (isCurrent ? 'bg-white text-slate-800 ring-4 ring-slate-200 shadow-slate-200' : 'bg-white text-slate-800'))}>
+                        
+                        <div className="flex items-center justify-between mb-2">
+                          <div className={"text-xs sm:text-sm font-bold uppercase tracking-wider " + (isMyRole ? 'text-emerald-100' : 'text-slate-400')}>{line.speaker} {isMyRole ? '(You)' : ''}</div>
+                          <button onClick={(e) => { e.stopPropagation(); playSingleLineTTS(line.text); }} className={"p-1.5 rounded-full hover:bg-black/10 transition-colors " + (isMyRole ? 'text-emerald-100' : 'text-slate-400')} title="Listen to this line">🔊</button>
+                        </div>
+                        
+                        <div className="cursor-pointer">
+                          <div className={"font-kyokasho text-xl sm:text-2xl font-semibold leading-relaxed tracking-wide transition-all duration-500 " + (isMyRole ? 'blur-[6px] group-hover:blur-none' : '')}>{line.text}</div>
+                          {line.subTexts && line.subTexts.length > 0 && (
+                            <div className={"mt-3 pt-3 border-t text-sm sm:text-base " + (isMyRole ? 'border-emerald-300/40 text-emerald-50' : 'border-slate-100 text-slate-500')}>
+                              {line.subTexts.map((st, i) => <div key={i} className={"mb-1.5 last:mb-0 leading-snug transition-all duration-500 " + (isMyRole && i===0 ? 'blur-[5px] group-hover:blur-none' : '')}>{st}</div>)}
+                            </div>
+                          )}
+                        </div>
+                        {isMyRole && userRecords[idx] && (
+                          <div className="mt-4 pt-4 border-t border-emerald-300/50 bg-emerald-700/20 rounded-xl p-4 text-white">
+                            <span className="text-xs uppercase tracking-wider opacity-80 block mb-1.5 font-ui">Recognized:</span>
+                            <div className="font-kyokasho font-semibold text-xl leading-relaxed">{userRecords[idx]}</div>
+                          </div>
+                        )}
+                        {isMyRole && isCurrent && status === 'ready_to_send' && userRecords[idx] && (
+                          <div className="mt-4 flex gap-3 justify-end font-ui">
+                            <button onClick={handleManualMic} className="px-4 py-2 text-sm font-bold bg-white/20 hover:bg-white/30 rounded-xl transition-colors flex items-center gap-1.5">🎤 Retry</button>
+                            <button onClick={handleSend} className="px-5 py-2 text-sm font-bold bg-white text-emerald-700 hover:bg-emerald-50 rounded-xl shadow-sm transition-colors flex items-center gap-1.5">⏭️ Send</button>
+                          </div>
+                        )}
+                        {isCurrent && status !== 'ready_to_send' && (
+                          <div className={"absolute top-1/2 -translate-y-1/2 text-3xl animate-bounce drop-shadow-md " + (isLeftSide ? '-right-10' : '-left-10')}>{isMyRole ? '🎤' : '🗣️'}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="h-10"></div>
+              </div>
+            </div>
+
+            {/* Controls (Footer) */}
+            <div className="bg-white border-t border-slate-200 p-4 sm:p-5 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.05)] z-10">
+              {!isPlaying && Object.keys(userRecords).length === 0 ? (
+                <button onClick={handleStart} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 sm:py-4 rounded-xl shadow-md transition-all text-lg flex justify-center items-center gap-2">
+                  <span className="text-xl">▶️</span> Start Role-play
+                </button>
+              ) : !isPlaying ? (
+                <div className="flex flex-col gap-3">
+                  <button onClick={handleStart} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl shadow-sm transition-all text-base flex justify-center items-center gap-2">
+                    <span className="text-lg">▶️</span> Play Again
+                  </button>
+                  {playMode !== 'listen' && (
+                    <div className="bg-indigo-50/50 p-4 rounded-xl border border-indigo-100/50 flex flex-col sm:flex-row gap-3 items-center">
+                      <span className="font-bold text-indigo-800 text-sm whitespace-nowrap"><span className="text-base mr-1">💾</span> Save Record</span>
+                      <input type="text" placeholder="Your name" value={userName} onChange={(e) => setUserName(e.target.value)} className="flex-1 w-full p-2.5 bg-white border border-indigo-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 text-sm" />
+                      <button onClick={handleDownloadRecord} className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-lg shadow-md transition-all text-sm whitespace-nowrap">Download</button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  <div className="text-center font-bold text-slate-600 h-6 text-sm sm:text-base">
+                    {status === 'speaking' && <span className="text-blue-500 tracking-wide">AI is speaking... 🗣️</span>}
+                    {status === 'listening' && <span className="text-rose-500 animate-pulse tracking-wide">Your turn! Please speak 🎤</span>}
+                    {status === 'ready_to_send' && <span className="text-emerald-600 tracking-wide">Review and click Send 👆</span>}
+                    {status === 'idle' && <span className="tracking-wide text-slate-400">Ready...</span>}
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={handleStop} className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2">
+                      <span className="text-base">⏹️</span> Stop
+                    </button>
+                    {(playMode === 'all' || dialogs[currentIndex]?.speaker === userRole) && (
+                      <>
+                        {status === 'idle' && <button onClick={handleManualMic} className="flex-1 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"><span className="text-base">🎤</span> Speak Again</button>}
+                        <button onClick={handleManualNext} className="flex-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold py-3 rounded-xl transition-all flex items-center justify-center gap-2"><span className="text-base">⏭️</span> Skip</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const rootElement = document.getElementById('root');
+    try {
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(<App />);
+    } catch(err) {
+      rootElement.innerHTML = '<div style="padding: 20px; color: red;">Failed to load App: ' + err.message + '</div>';
+    }
+  <\/script>
+</body>
+</html>`;
+    };
+
+    const rootElement = document.getElementById('root');
+    try {
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(<App />);
+    } catch(err) {
+      rootElement.innerHTML = '<div style="padding: 20px; color: red;">Failed to load App: ' + err.message + '</div>';
+    }
+  </script>
 </body>
 </html>
