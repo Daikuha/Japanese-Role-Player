@@ -97,30 +97,10 @@
       return { dialogs, speakers: speakers.length > 0 ? speakers : ['A', 'B'] };
     };
 
-    const DEFAULT_SCRIPT = `A: すみません。　この　カメラ、　ください。
-Sumimasen. Kono kamera, kudasai.
-Hello, I’d like to buy this camera.
-
-B: ありがとうございます。　ポイントカード、　ありますか。
-Arigatō gozaimasu. Pointo kādo, arimasu ka.
-Thank you. Do you have a Yodobashi point card?
-
-A: いいえ、　ありません。
-Iie, arimasen.
-No, I don’t.
-
-B: つくりますか。　きょうは　むりょうですよ。
-Tsukurimasu ka. Kyō wa muryō desu yo.
-Would you like to sign up for one? It’s free today.
-
-A: いいえ、　けっこうです。　カメラだけで　おねがいします。
-Iie, kekkō desu. Kamera dake de onegaishimasu.
-No, thank you. I don’t need a card. Just the camera is fine.`;
-
     function App() {
       const [appState, setAppState] = useState('setup'); 
-      const [appTitle, setAppTitle] = useState('Shopping Example');
-      const [scriptInput, setScriptInput] = useState(DEFAULT_SCRIPT);
+      const [appTitle, setAppTitle] = useState('');
+      const [scriptInput, setScriptInput] = useState('');
       const [dialogs, setDialogs] = useState([]);
       const [availableSpeakers, setAvailableSpeakers] = useState(['A', 'B']);
       
@@ -133,6 +113,7 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
       const [userRecords, setUserRecords] = useState({});
       const [userName, setUserName] = useState('');
       const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+      const [isHowToUseOpen, setIsHowToUseOpen] = useState(false);
       
       const recognitionRef = useRef(null);
       const isRecognizingRef = useRef(false);
@@ -208,7 +189,9 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
             isRecognizingRef.current = false;
             if (isPlayingRef.current && playMode !== 'listen') {
               setTimeout(() => {
-                if (isPlayingRef.current) startRecognition();
+                if (isPlayingRef.current && statusRef.current === 'listening') {
+                  startRecognition();
+                }
               }, 100);
             }
           };
@@ -432,58 +415,70 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
           {appState === 'setup' && (
             <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 sm:p-8 font-ui text-slate-800">
               <div className="w-full max-w-3xl bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col h-[100dvh] sm:h-[90vh] sm:max-h-[900px]">
-                <div className="bg-emerald-600 p-6 sm:p-8 text-white">
+                <div className="bg-emerald-600 p-6 sm:p-8 text-white flex-shrink-0">
                   <h1 className="text-2xl sm:text-3xl font-bold text-center tracking-wide">Role-play Generator</h1>
-                  <p className="text-center text-emerald-100 mt-2 text-sm sm:text-base">Create your conversational practice app</p>
                 </div>
                 
                 <div className="p-6 sm:p-10 flex-1 flex flex-col gap-6 overflow-y-auto">
-                  <div className="bg-emerald-50 text-emerald-800 p-5 rounded-2xl border border-emerald-100 shadow-sm">
-                    <p className="font-bold mb-3 flex items-center gap-2 text-base"><span className="text-xl">📄</span> How to use</p>
-                    <ol className="list-decimal pl-6 opacity-90 space-y-2 text-sm sm:text-base">
-                      <li>Input the Title of your role-play.</li>
-                      <li>Input your conversation script below.<br/>
-                          <span className="text-xs text-emerald-700 bg-emerald-100/50 px-2 py-0.5 rounded">💡 You can easily copy and paste a script created by the GEM.</span>
-                      </li>
-                      <li>Use <code>A:</code> and <code>B:</code> to specify speakers, <strong>OR</strong> leave a blank line between turns.</li>
-                    </ol>
+                  
+                  {/* How to use Accordion */}
+                  <div className="bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100 shadow-sm overflow-hidden flex-shrink-0">
+                    <button 
+                      onClick={() => setIsHowToUseOpen(!isHowToUseOpen)}
+                      className="w-full p-4 flex items-center justify-between font-bold text-base hover:bg-emerald-100/50 transition-colors"
+                    >
+                      <span className="flex items-center gap-2"><span className="text-xl">📄</span> How to use</span>
+                      <span className={`transform transition-transform ${isHowToUseOpen ? 'rotate-180' : ''}`}>▼</span>
+                    </button>
+                    {isHowToUseOpen && (
+                      <div className="p-4 pt-0">
+                        <p className="text-sm sm:text-base mb-2 opacity-90">Create a role-play practice app with AI voice reading and speech recognition.</p>
+                        <ol className="list-decimal pl-6 opacity-90 space-y-2 text-sm sm:text-base mt-2">
+                          <li>Input the Title of your role-play.</li>
+                          <li>Input your conversation script below.<br/>
+                              <span className="text-xs text-emerald-700 bg-emerald-100/50 px-2 py-0.5 rounded mt-1 inline-block">💡 You can easily copy and paste a script created by the GEM.</span>
+                          </li>
+                          <li>Use <code>A:</code> and <code>B:</code> to specify speakers, <strong>OR</strong> leave a blank line between turns.</li>
+                        </ol>
+                      </div>
+                    )}
                   </div>
                   
-                  <div className="flex flex-col">
+                  <div className="flex flex-col flex-shrink-0">
                     <label className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Title</label>
                     <input 
                       type="text"
                       className="w-full p-4 border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-ui text-sm sm:text-base shadow-inner transition-all bg-slate-50 focus:bg-white"
                       value={appTitle}
                       onChange={(e) => setAppTitle(e.target.value)}
-                      placeholder="e.g. Shopping Example"
+                      placeholder="e.g. Shopping"
                     />
                   </div>
 
                   <div className="flex-1 flex flex-col min-h-[250px]">
-                    <label className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Your Script</label>
+                    <label className="text-sm font-bold text-slate-500 mb-2 uppercase tracking-wider">Script</label>
                     <textarea 
-                      className="flex-1 w-full p-5 border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-mono text-sm sm:text-base resize-none shadow-inner transition-all leading-relaxed bg-slate-50 focus:bg-white"
+                      className="flex-1 w-full p-5 border-2 border-slate-200 rounded-2xl focus:border-emerald-500 focus:ring-4 focus:ring-emerald-500/20 font-mono text-sm sm:text-base resize-none shadow-inner transition-all leading-relaxed bg-slate-50 focus:bg-white whitespace-pre-wrap"
                       value={scriptInput}
                       onChange={(e) => setScriptInput(e.target.value)}
-                      placeholder="A: こんにちは！&#10;Hello!&#10;&#10;B: おはようございます。&#10;Good morning."
+                      placeholder={"A: これ、いくらですか？\nKore, ikura desu ka?\nHow much is this?\n\nB: 1000円です。\nSen-en desu.\nIt's 1000 yen."}
                     />
                   </div>
                   
-                  <div className="flex flex-col sm:flex-row gap-4 mt-2">
+                  <div className="flex flex-col sm:flex-row gap-4 mt-2 flex-shrink-0">
                     <button 
                       onClick={handleLoadScript}
                       disabled={!scriptInput.trim()}
                       className="flex-1 bg-emerald-600 hover:bg-emerald-500 hover:-translate-y-1 text-white font-bold py-5 px-6 rounded-2xl shadow-lg shadow-emerald-600/30 transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 text-lg flex items-center justify-center gap-2"
                     >
-                      <span className="text-2xl">▶️</span> Preview / Practice Here
+                      <span className="text-2xl">▶️</span> Preview / Practice
                     </button>
                     <button 
                       onClick={handleExportApp}
                       disabled={!scriptInput.trim()}
                       className="flex-1 bg-indigo-600 hover:bg-indigo-500 hover:-translate-y-1 text-white font-bold py-5 px-6 rounded-2xl shadow-lg shadow-indigo-600/30 transition-all duration-300 disabled:opacity-50 disabled:hover:translate-y-0 text-lg flex items-center justify-center gap-2"
                     >
-                      <span className="text-2xl">📥</span> Download Offline App
+                      <span className="text-2xl">📥</span> Download
                     </button>
                   </div>
                 </div>
@@ -524,14 +519,14 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
                     {isModeMenuOpen && (
                       <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl overflow-hidden z-50 border border-emerald-100 flex flex-col text-slate-800">
                         <button onClick={() => { setPlayMode('listen'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'listen' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎧 Just Listen</button>
-                        <div className="h-px bg-slate-100 mx-2"></div>
-                        <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
                         {availableSpeakers.map(spk => (
                           <React.Fragment key={spk}>
                             <div className="h-px bg-slate-100 mx-2"></div>
                             <button onClick={() => { setPlayMode(spk); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === spk ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>👤 Play Role {spk}</button>
                           </React.Fragment>
                         ))}
+                        <div className="h-px bg-slate-100 mx-2"></div>
+                        <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
                       </div>
                     )}
                   </div>
@@ -720,6 +715,7 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
       const [userRecords, setUserRecords] = useState({});
       const [userName, setUserName] = useState('');
       const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+      const [isHowToUseOpen, setIsHowToUseOpen] = useState(false);
       
       const recognitionRef = useRef(null);
       const isRecognizingRef = useRef(false);
@@ -919,14 +915,14 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
                 {isModeMenuOpen && (
                   <div className="absolute top-full right-0 mt-2 w-48 bg-white rounded-xl shadow-xl overflow-hidden z-50 border border-emerald-100 flex flex-col text-slate-800">
                     <button onClick={() => { setPlayMode('listen'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'listen' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎧 Just Listen</button>
-                    <div className="h-px bg-slate-100 mx-2"></div>
-                    <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
                     {availableSpeakers.map(spk => (
                       <React.Fragment key={spk}>
                         <div className="h-px bg-slate-100 mx-2"></div>
                         <button onClick={() => { setPlayMode(spk); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === spk ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>👤 Play Role {spk}</button>
                       </React.Fragment>
                     ))}
+                    <div className="h-px bg-slate-100 mx-2"></div>
+                    <button onClick={() => { setPlayMode('all'); setIsModeMenuOpen(false); }} className={"p-3 text-left font-bold text-sm transition-colors " + (playMode === 'all' ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-50')}>🎭 Play All Roles</button>
                   </div>
                 )}
               </div>
@@ -935,13 +931,6 @@ No, thank you. I don’t need a card. Just the camera is fine.`;
             {/* Script Display */}
             <div className="flex-1 overflow-y-auto px-4 py-6 sm:px-6 sm:py-8 bg-slate-100">
               <div className="max-w-2xl mx-auto w-full">
-                {!isPlaying && Object.keys(userRecords).length === 0 && (
-                  <div className="my-10 flex justify-center animate-fade-in">
-                    <button onClick={handleStart} className="w-full max-w-sm bg-emerald-600 hover:bg-emerald-500 hover:-translate-y-1 text-white font-bold py-5 px-8 rounded-2xl shadow-xl shadow-emerald-600/20 text-xl transition-all duration-300 flex items-center justify-center gap-3">
-                      <span className="text-2xl">▶️</span> Start Role-play
-                    </button>
-                  </div>
-                )}
                 {dialogs.map((line, idx) => {
                   const isCurrent = idx === currentIndex;
                   const isPast = idx < currentIndex;
